@@ -5,6 +5,10 @@
   "keywords": [],
   "license": "MIT",
   "author": "",
+  "exports": {
+    ".": "./dist/index.js",
+    "./plugin-sdk": "./dist/plugin-sdk/index.js"
+  },
   "bin": {
     "openclaw": "openclaw.mjs"
   },
