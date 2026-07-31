@@ -83,6 +83,16 @@ function serveStatic(req, res, pathname) {
   res.end(fs.readFileSync(target));
 }
 
+// Public write endpoints gated by captcha (a no-op unless TURNSTILE_SECRET is set).
+const SUBMIT_PATHS = new Set([
+  "/api/executives",
+  "/api/reviews",
+  "/api/responses",
+  "/api/disputes",
+  "/api/reports",
+  "/api/claims",
+]);
+
 async function handleApi(req, res, url) {
   const { pathname } = url;
   const method = req.method ?? "GET";
@@ -91,7 +101,17 @@ async function handleApi(req, res, url) {
     return json(res, 200, { turnstileSiteKey: process.env.TURNSTILE_SITE_KEY ?? null });
   }
   if (method === "GET" && pathname === "/api/executives") {
-    return json(res, 200, { executives: store.listExecutives({ q: url.searchParams.get("q") ?? "" }) });
+    const p = url.searchParams;
+    return json(res, 200, {
+      executives: store.listExecutives({
+        q: p.get("q") ?? "",
+        category: p.get("category") ?? "",
+        location: p.get("location") ?? "",
+        minRating: p.get("minRating") ?? 0,
+        maxRating: p.get("maxRating") ?? 5,
+        sort: p.get("sort") ?? "reviews",
+      }),
+    });
   }
   const execMatch = pathname.match(/^\/api\/executives\/([a-f0-9]+)$/);
   if (method === "GET" && execMatch) {
@@ -100,26 +120,38 @@ async function handleApi(req, res, url) {
       ? json(res, 200, { executive })
       : json(res, 404, { error: "Executive not found (profiles appear after moderation)" });
   }
-  if (method === "POST" && pathname === "/api/executives") {
-    const body = await readBody(req);
-    const executive = store.submitExecutive(body);
-    return json(res, 201, { executive, message: "Profile submitted for moderation" });
-  }
-  if (method === "POST" && pathname === "/api/reviews") {
+  if (method === "POST" && SUBMIT_PATHS.has(pathname)) {
     const body = await readBody(req);
     await verifyTurnstile(body.turnstileToken, process.env.TURNSTILE_SECRET, req.socket.remoteAddress);
-    const review = store.submitReviewBundle(body);
-    return json(res, 201, { review, message: "Review submitted for moderation" });
-  }
-  if (method === "POST" && pathname === "/api/responses") {
-    const body = await readBody(req);
-    const response = store.submitResponse(body);
-    return json(res, 201, { response, message: "Response submitted for moderation" });
-  }
-  if (method === "POST" && pathname === "/api/disputes") {
-    const body = await readBody(req);
-    const dispute = store.submitDispute(body);
-    return json(res, 201, { dispute, message: "Dispute received; a moderator will review it" });
+    if (pathname === "/api/executives")
+      return json(res, 201, {
+        executive: store.submitExecutive(body),
+        message: "Profile submitted for moderation",
+      });
+    if (pathname === "/api/reviews")
+      return json(res, 201, {
+        review: store.submitReviewBundle(body),
+        message: "Review submitted for moderation",
+      });
+    if (pathname === "/api/responses")
+      return json(res, 201, {
+        response: store.submitResponse(body),
+        message: "Response submitted for moderation",
+      });
+    if (pathname === "/api/reports")
+      return json(res, 201, {
+        report: store.submitReport(body),
+        message: "Report received; a moderator will review this content",
+      });
+    if (pathname === "/api/claims")
+      return json(res, 201, {
+        claim: store.submitClaim(body),
+        message: "Claim received; a moderator will verify it and contact you",
+      });
+    return json(res, 201, {
+      dispute: store.submitDispute(body),
+      message: "Dispute received; a moderator will review it",
+    });
   }
 
   if (pathname === "/api/admin/queue" && method === "GET") {
@@ -130,6 +162,11 @@ async function handleApi(req, res, url) {
     requireAdmin(req);
     const body = await readBody(req);
     return json(res, 200, { item: store.moderate(body) });
+  }
+  if (pathname === "/api/admin/links" && method === "POST") {
+    requireAdmin(req);
+    const body = await readBody(req);
+    return json(res, 200, { executive: store.updateExecutiveLinks(body) });
   }
 
   return json(res, 404, { error: "Not found" });

@@ -3,12 +3,26 @@
 // Operates on a plain db object; `persist` is called after every mutation.
 // All user submissions start "pending" and only become publicly visible after
 // moderator approval.
+import {
+  MAX_TEXT,
+  ValidationError,
+  newId,
+  optString,
+  optUrl,
+  reqEmail,
+  reqString,
+} from "./validators.mjs";
+
+export { ValidationError } from "./validators.mjs";
 
 export const REVIEW_CATEGORIES = [
   "contract-terms",
   "royalty-payments",
   "advance-recoupment",
   "ownership-rights",
+  "publishing-splits",
+  "unpaid-fees",
+  "tour-live-deals",
   "communication",
   "misrepresentation",
   "other",
@@ -19,46 +33,44 @@ export const CATEGORY_LABELS = {
   "royalty-payments": "Royalty payments",
   "advance-recoupment": "Advances & recoupment",
   "ownership-rights": "Ownership & rights",
+  "publishing-splits": "Publishing & songwriting splits",
+  "unpaid-fees": "Unpaid fees or invoices",
+  "tour-live-deals": "Touring & live deals",
   communication: "Communication & professionalism",
   misrepresentation: "Misrepresentation",
   other: "Other",
 };
 
-const MAX_TEXT = 5000;
-
-export class ValidationError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "ValidationError";
-    this.status = 400;
-  }
-}
+// Only these hosts may appear in a profile's link fields.
+const LINK_HOSTS = {
+  linkedin: ["linkedin.com"],
+  instagram: ["instagram.com"],
+  website: null, // any https URL
+};
 
 export function emptyDb() {
-  return { executives: [], reviews: [], responses: [], disputes: [] };
+  return { executives: [], reviews: [], responses: [], disputes: [], reports: [], claims: [] };
 }
 
-function reqString(value, name, { min = 1, max = 300 } = {}) {
-  if (typeof value !== "string") throw new ValidationError(`${name} is required`);
-  const trimmed = value.trim();
-  if (trimmed.length < min) throw new ValidationError(`${name} is too short`);
-  if (trimmed.length > max) throw new ValidationError(`${name} is too long (max ${max} chars)`);
-  return trimmed;
+// Older stored databases predate the reports/claims collections.
+function normalizeDb(db) {
+  for (const key of ["executives", "reviews", "responses", "disputes", "reports", "claims"]) {
+    if (!Array.isArray(db[key])) db[key] = [];
+  }
+  return db;
 }
 
-function optString(value, name, opts = {}) {
-  if (value === undefined || value === null || value === "") return "";
-  return reqString(value, name, { min: 0, ...opts });
+function parseLinks(input, name = "links") {
+  if (!input || typeof input !== "object") return { linkedin: "", instagram: "", website: "" };
+  return {
+    linkedin: optUrl(input.linkedin, "LinkedIn URL", { allowedHosts: LINK_HOSTS.linkedin }),
+    instagram: optUrl(input.instagram, "Instagram URL", { allowedHosts: LINK_HOSTS.instagram }),
+    website: optUrl(input.website, "Website URL"),
+  };
 }
 
-function newId() {
-  // Web Crypto so the same code runs on Node 22+ and Cloudflare Workers.
-  const bytes = new Uint8Array(8);
-  globalThis.crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-export function createStoreCore(db, persist) {
+export function createStoreCore(rawDb, persist) {
+  const db = normalizeDb(rawDb);
   const now = () => new Date().toISOString();
 
   function approvedReviewsFor(executiveId) {
@@ -71,26 +83,36 @@ export function createStoreCore(db, persist) {
       ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
       : null;
     const byCategory = {};
-    for (const r of reviews) byCategory[r.category] = (byCategory[r.category] ?? 0) + 1;
+    const locations = new Set();
+    for (const r of reviews) {
+      byCategory[r.category] = (byCategory[r.category] ?? 0) + 1;
+      if (r.location) locations.add(r.location);
+    }
     return {
       id: executive.id,
       name: executive.name,
       role: executive.role,
       company: executive.company,
       region: executive.region,
+      links: executive.links ?? { linkedin: "", instagram: "", website: "" },
+      claimed: Boolean(executive.claimed),
       reviewCount: reviews.length,
       averageRating: avg === null ? null : Math.round(avg * 10) / 10,
       categories: byCategory,
+      // Where the reported dealings took place, aggregated from the reviews.
+      locations: [...locations],
     };
   }
 
-  function submitExecutive({ name, role, company, region }) {
+  function submitExecutive({ name, role, company, region, links }) {
     const executive = {
       id: newId(),
       name: reqString(name, "name", { min: 2, max: 120 }),
       role: optString(role, "role", { max: 120 }),
       company: optString(company, "company", { max: 120 }),
       region: optString(region, "region", { max: 120 }),
+      links: parseLinks(links),
+      claimed: false,
       status: "pending",
       createdAt: now(),
     };
@@ -99,10 +121,28 @@ export function createStoreCore(db, persist) {
     return executive;
   }
 
-  function listExecutives({ q = "", includePending = false } = {}) {
+  /**
+   * Public listing with filters. `q` matches name/company/role, `location`
+   * matches the profile region or any review location, `category` and
+   * `minRating` narrow by review content.
+   */
+  function listExecutives({
+    q = "",
+    category = "",
+    location = "",
+    minRating = 0,
+    maxRating = 5,
+    sort = "reviews",
+    includePending = false,
+  } = {}) {
     const query = q.trim().toLowerCase();
-    return db.executives
+    const place = location.trim().toLowerCase();
+    const min = Number(minRating) || 0;
+    const max = Number(maxRating) || 5;
+
+    let rows = db.executives
       .filter((e) => includePending || e.status === "approved")
+      .map(summarize)
       .filter(
         (e) =>
           !query ||
@@ -110,8 +150,23 @@ export function createStoreCore(db, persist) {
           e.company.toLowerCase().includes(query) ||
           e.role.toLowerCase().includes(query),
       )
-      .map(summarize)
-      .sort((a, b) => b.reviewCount - a.reviewCount || a.name.localeCompare(b.name));
+      .filter(
+        (e) =>
+          !place ||
+          e.region.toLowerCase().includes(place) ||
+          e.locations.some((loc) => loc.toLowerCase().includes(place)),
+      )
+      .filter((e) => !category || (e.categories[category] ?? 0) > 0)
+      .filter((e) => e.averageRating === null || (e.averageRating >= min && e.averageRating <= max));
+
+    const sorters = {
+      reviews: (a, b) => b.reviewCount - a.reviewCount || a.name.localeCompare(b.name),
+      worst: (a, b) => (a.averageRating ?? 99) - (b.averageRating ?? 99),
+      best: (a, b) => (b.averageRating ?? -1) - (a.averageRating ?? -1),
+      name: (a, b) => a.name.localeCompare(b.name),
+    };
+    rows.sort(sorters[sort] ?? sorters.reviews);
+    return rows;
   }
 
   function getExecutive(id) {
@@ -135,6 +190,7 @@ export function createStoreCore(db, persist) {
     title,
     body,
     dealYear,
+    location,
     reviewerName,
     firsthand,
   }) {
@@ -148,7 +204,8 @@ export function createStoreCore(db, persist) {
       throw new ValidationError(
         "You must confirm this review describes your own first-hand experience",
       );
-    const year = dealYear === undefined || dealYear === null || dealYear === "" ? null : Number(dealYear);
+    const year =
+      dealYear === undefined || dealYear === null || dealYear === "" ? null : Number(dealYear);
     if (year !== null && (!Number.isInteger(year) || year < 1950 || year > new Date().getFullYear()))
       throw new ValidationError("dealYear must be a plausible year");
     const review = {
@@ -159,6 +216,8 @@ export function createStoreCore(db, persist) {
       title: reqString(title, "title", { min: 3, max: 160 }),
       body: reqString(body, "body", { min: 30, max: MAX_TEXT }),
       dealYear: year,
+      // Free text so it works worldwide, e.g. "Atlanta, GA, USA" or "London, UK".
+      location: optString(location, "location", { max: 120 }),
       reviewerName: optString(reviewerName, "reviewerName", { max: 80 }) || "Anonymous",
       firsthand: true,
       status: "pending",
@@ -219,7 +278,7 @@ export function createStoreCore(db, persist) {
       id: newId(),
       subjectType,
       subjectId,
-      contactEmail: reqString(contactEmail, "contactEmail", { min: 5, max: 200 }),
+      contactEmail: reqEmail(contactEmail, "contactEmail"),
       reason: reqString(reason, "reason", { min: 20, max: MAX_TEXT }),
       status: "open",
       createdAt: now(),
@@ -229,7 +288,52 @@ export function createStoreCore(db, persist) {
     return dispute;
   }
 
+  const REPORT_REASONS = ["false", "harassment", "private-info", "spam", "not-firsthand", "other"];
+
+  /** Public "flag this" on an already-published review. */
+  function submitReport({ reviewId, reason, detail, reporterEmail }) {
+    const review = db.reviews.find((r) => r.id === reviewId);
+    if (!review) throw new ValidationError("Unknown review");
+    if (!REPORT_REASONS.includes(reason))
+      throw new ValidationError("reason is not one of the allowed values");
+    const report = {
+      id: newId(),
+      reviewId,
+      reason,
+      detail: optString(detail, "detail", { max: MAX_TEXT }),
+      reporterEmail: reporterEmail ? reqEmail(reporterEmail, "reporterEmail") : "",
+      status: "open",
+      createdAt: now(),
+    };
+    db.reports.push(report);
+    persist();
+    return report;
+  }
+
+  /** Request to claim a profile as its subject; a moderator verifies offline. */
+  function submitClaim({ executiveId, claimantName, claimantEmail, evidence, links }) {
+    const executive = db.executives.find((e) => e.id === executiveId);
+    if (!executive) throw new ValidationError("Unknown executive");
+    const claim = {
+      id: newId(),
+      executiveId,
+      claimantName: reqString(claimantName, "claimantName", { min: 2, max: 120 }),
+      claimantEmail: reqEmail(claimantEmail, "claimantEmail"),
+      evidence: reqString(evidence, "evidence", { min: 20, max: MAX_TEXT }),
+      links: parseLinks(links),
+      status: "open",
+      createdAt: now(),
+    };
+    db.claims.push(claim);
+    persist();
+    return claim;
+  }
+
   function moderationQueue() {
+    const withReview = (item) => ({
+      ...item,
+      review: db.reviews.find((r) => r.id === item.reviewId) ?? null,
+    });
     return {
       executives: db.executives.filter((e) => e.status === "pending"),
       reviews: db.reviews
@@ -240,6 +344,13 @@ export function createStoreCore(db, persist) {
         })),
       responses: db.responses.filter((r) => r.status === "pending"),
       disputes: db.disputes.filter((d) => d.status === "open"),
+      reports: db.reports.filter((r) => r.status === "open").map(withReview),
+      claims: db.claims
+        .filter((c) => c.status === "open")
+        .map((c) => ({
+          ...c,
+          executive: db.executives.find((e) => e.id === c.executiveId) ?? null,
+        })),
     };
   }
 
@@ -249,19 +360,33 @@ export function createStoreCore(db, persist) {
       review: db.reviews,
       response: db.responses,
     };
-    if (type === "dispute") {
-      const dispute = db.disputes.find((d) => d.id === id);
-      if (!dispute) throw new ValidationError("Unknown dispute");
+    // Triage collections use resolve/dismiss rather than approve/reject.
+    const triage = { dispute: db.disputes, report: db.reports, claim: db.claims };
+    if (triage[type]) {
+      const item = triage[type].find((entry) => entry.id === id);
+      if (!item) throw new ValidationError(`Unknown ${type}`);
       if (!["resolve", "dismiss"].includes(action))
-        throw new ValidationError("dispute action must be 'resolve' or 'dismiss'");
-      dispute.status = action === "resolve" ? "resolved" : "dismissed";
-      dispute.moderatorNote = optString(note, "note", { max: MAX_TEXT });
-      dispute.moderatedAt = now();
+        throw new ValidationError(`${type} action must be 'resolve' or 'dismiss'`);
+      item.status = action === "resolve" ? "resolved" : "dismissed";
+      item.moderatorNote = optString(note, "note", { max: MAX_TEXT });
+      item.moderatedAt = now();
+      // An approved claim marks the profile as verified to its subject.
+      if (type === "claim" && action === "resolve") {
+        const executive = db.executives.find((e) => e.id === item.executiveId);
+        if (executive) {
+          executive.claimed = true;
+          // Adopt any links the claimant supplied and a moderator accepted.
+          for (const key of ["linkedin", "instagram", "website"]) {
+            if (item.links?.[key]) executive.links = { ...executive.links, [key]: item.links[key] };
+          }
+        }
+      }
       persist();
-      return dispute;
+      return item;
     }
     const collection = collections[type];
-    if (!collection) throw new ValidationError("type must be executive, review, response, or dispute");
+    if (!collection)
+      throw new ValidationError("type must be executive, review, response, dispute, report, or claim");
     if (!["approve", "reject"].includes(action))
       throw new ValidationError("action must be 'approve' or 'reject'");
     const item = collection.find((entry) => entry.id === id);
@@ -273,6 +398,15 @@ export function createStoreCore(db, persist) {
     return item;
   }
 
+  /** Moderator-only: attach or correct a profile's links. */
+  function updateExecutiveLinks({ executiveId, links }) {
+    const executive = db.executives.find((e) => e.id === executiveId);
+    if (!executive) throw new ValidationError("Unknown executive");
+    executive.links = parseLinks(links);
+    persist();
+    return executive;
+  }
+
   return {
     submitExecutive,
     listExecutives,
@@ -281,8 +415,12 @@ export function createStoreCore(db, persist) {
     submitReviewBundle,
     submitResponse,
     submitDispute,
+    submitReport,
+    submitClaim,
+    updateExecutiveLinks,
     moderationQueue,
     moderate,
+    REPORT_REASONS,
     ValidationError,
   };
 }

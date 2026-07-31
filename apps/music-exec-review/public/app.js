@@ -7,10 +7,40 @@ const CATEGORY_LABELS = {
   "royalty-payments": "Royalty payments",
   "advance-recoupment": "Advances & recoupment",
   "ownership-rights": "Ownership & rights",
+  "publishing-splits": "Publishing & songwriting splits",
+  "unpaid-fees": "Unpaid fees or invoices",
+  "tour-live-deals": "Touring & live deals",
   communication: "Communication & professionalism",
   misrepresentation: "Misrepresentation",
   other: "Other",
 };
+
+const REPORT_REASONS = {
+  false: "Contains false statements",
+  harassment: "Harassment or abuse",
+  "private-info": "Contains private/personal information",
+  spam: "Spam or fake review",
+  "not-firsthand": "Not a first-hand account",
+  other: "Other",
+};
+
+const LINK_LABELS = { linkedin: "LinkedIn", instagram: "Instagram", website: "Website" };
+
+// Renders profile links safely: https only, opened in a new tab with the
+// referrer and opener stripped, and nofollow so we do not pass ranking signal.
+function linkRow(links = {}) {
+  const entries = Object.entries(LINK_LABELS)
+    .filter(([key]) => links[key])
+    .map(([key, label]) =>
+      el("a", {
+        class: "badge link-badge",
+        href: links[key],
+        target: "_blank",
+        rel: "noopener noreferrer nofollow",
+      }, label),
+    );
+  return entries.length ? el("div", { class: "link-row" }, entries) : null;
+}
 
 // --- tiny DOM helpers -------------------------------------------------------
 function el(tag, attrs = {}, ...children) {
@@ -123,20 +153,47 @@ async function pageBrowse() {
     placeholder: "Search by name, company, or role…",
     "aria-label": "Search executives",
   });
+  const locationInput = el("input", {
+    type: "search",
+    placeholder: "Filter by location…",
+    "aria-label": "Filter by location",
+  });
+  const categorySelect = el("select", { "aria-label": "Filter by category" },
+    el("option", { value: "" }, "All categories"),
+    Object.entries(CATEGORY_LABELS).map(([value, label]) => el("option", { value }, label)),
+  );
+  const sortSelect = el("select", { "aria-label": "Sort results" },
+    el("option", { value: "reviews" }, "Most reviewed"),
+    el("option", { value: "worst" }, "Lowest rated first"),
+    el("option", { value: "best" }, "Highest rated first"),
+    el("option", { value: "name" }, "Name (A–Z)"),
+  );
 
   async function refresh() {
-    const { executives } = await api(`/api/executives?q=${encodeURIComponent(input.value)}`);
+    const params = new URLSearchParams({
+      q: input.value,
+      location: locationInput.value,
+      category: categorySelect.value,
+      sort: sortSelect.value,
+    });
+    const { executives } = await api(`/api/executives?${params}`);
     list.replaceChildren(
+      el("p", { class: "muted result-count" },
+        `${executives.length} profile${executives.length === 1 ? "" : "s"}`),
       executives.length
         ? el("div", {}, executives.map(execCard))
-        : el("p", { class: "muted" }, "No published profiles match. Profiles appear after moderation — be the first to submit a review."),
+        : el("p", { class: "muted" }, "No published profiles match those filters. Profiles appear after moderation — be the first to submit a review."),
     );
   }
   let timer;
-  input.addEventListener("input", () => {
+  const debounced = () => {
     clearTimeout(timer);
     timer = setTimeout(() => refresh().catch(console.error), 200);
-  });
+  };
+  input.addEventListener("input", debounced);
+  locationInput.addEventListener("input", debounced);
+  categorySelect.addEventListener("change", () => refresh().catch(console.error));
+  sortSelect.addEventListener("change", () => refresh().catch(console.error));
 
   render(
     el("section", { class: "hero" },
@@ -144,7 +201,8 @@ async function pageBrowse() {
       el("p", {}, "Moderated, first-hand reviews of music industry executives, managers, and labels — contract terms, royalty practices, and professional conduct, reported by the artists who lived them."),
       el("a", { class: "btn primary", href: "#/submit" }, "Share your experience"),
     ),
-    el("div", { class: "search-row" }, input),
+    el("div", { class: "search-row" }, input, locationInput),
+    el("div", { class: "filter-row" }, categorySelect, sortSelect),
     list,
   );
   await refresh();
@@ -156,13 +214,20 @@ function execCard(executive) {
       class: "card clickable",
       onclick: () => { location.hash = `#/exec/${executive.id}`; },
     },
-    el("h3", {}, executive.name),
+    el("h3", {},
+      executive.name,
+      executive.claimed ? el("span", { class: "badge claimed", title: "This profile has been claimed and verified by its subject" }, "Claimed") : null,
+    ),
     subtitle ? el("div", { class: "meta" }, subtitle) : null,
     el("div", { class: "rating-line" },
       executive.averageRating !== null
         ? [stars(executive.averageRating), el("span", { class: "muted" }, `${executive.averageRating} · ${executive.reviewCount} review${executive.reviewCount === 1 ? "" : "s"}`)]
         : el("span", { class: "muted" }, "No published reviews yet"),
     ),
+    executive.locations?.length
+      ? el("div", { class: "meta" }, `Reported in: ${executive.locations.slice(0, 3).join(" · ")}`)
+      : null,
+    linkRow(executive.links),
   );
 }
 
@@ -187,10 +252,16 @@ async function pageExecutive(id) {
           : el("span", { class: "muted" }, "No published reviews yet"),
       ),
       el("div", {}, categoryBadges),
+      executive.locations?.length
+        ? el("p", { class: "meta" }, `Reported dealings in: ${executive.locations.join(" · ")}`)
+        : null,
+      linkRow(executive.links),
       el("p", {},
         el("a", { class: "btn primary", href: `#/submit?exec=${executive.id}` }, "Write a review"),
         " ",
         el("a", { class: "btn", href: `#/dispute/executive/${executive.id}` }, "Is this you? Respond or dispute"),
+        " ",
+        el("a", { class: "btn", href: `#/claim/${executive.id}` }, "Claim this profile"),
       ),
       el("div", {}, executive.reviews.map(reviewBlock)),
     ),
@@ -201,6 +272,7 @@ function reviewBlock(review) {
   const meta = [
     review.reviewerName,
     review.dealYear ? `deal year ${review.dealYear}` : null,
+    review.location || null,
     CATEGORY_LABELS[review.category] ?? review.category,
     new Date(review.createdAt).toLocaleDateString(),
   ].filter(Boolean).join(" · ");
@@ -215,7 +287,10 @@ function reviewBlock(review) {
         el("p", { class: "body" }, resp.body),
       ),
     ),
-    el("a", { class: "muted", href: `#/respond/${review.id}` }, "Respond to this review"),
+    el("div", { class: "review-actions" },
+      el("a", { class: "muted", href: `#/respond/${review.id}` }, "Respond to this review"),
+      el("a", { class: "muted", href: `#/report/${review.id}` }, "Report this review"),
+    ),
   );
 }
 
@@ -237,7 +312,17 @@ async function pageSubmit(params) {
     el("label", {}, "Full name", el("input", { name: "newName", placeholder: "e.g. Jordan Placeholder" })),
     el("label", {}, "Role", el("input", { name: "newRole", placeholder: "e.g. A&R Executive, Manager" })),
     el("label", {}, "Company / label", el("input", { name: "newCompany" })),
-    el("label", {}, "Region", el("input", { name: "newRegion", placeholder: "e.g. Atlanta, GA" })),
+    el("label", {}, "Where they are based", el("input", { name: "newRegion", placeholder: "e.g. Atlanta, GA" })),
+    el("label", {}, "LinkedIn profile (optional)",
+      el("span", { class: "hint" }, "Helps moderators confirm this is the right person and avoid mixing up people with the same name."),
+      el("input", { name: "newLinkedin", type: "url", placeholder: "https://www.linkedin.com/in/…" }),
+    ),
+    el("label", {}, "Instagram profile (optional)",
+      el("input", { name: "newInstagram", type: "url", placeholder: "https://www.instagram.com/…" }),
+    ),
+    el("label", {}, "Company website (optional)",
+      el("input", { name: "newWebsite", type: "url", placeholder: "https://…" }),
+    ),
   );
   const syncNewFields = () => { newExecFields.style.display = select.value ? "none" : ""; };
   select.addEventListener("change", syncNewFields);
@@ -259,12 +344,18 @@ async function pageSubmit(params) {
           newExecutive: executiveId ? undefined : {
             name: fd.get("newName"), role: fd.get("newRole"),
             company: fd.get("newCompany"), region: fd.get("newRegion"),
+            links: {
+              linkedin: fd.get("newLinkedin"),
+              instagram: fd.get("newInstagram"),
+              website: fd.get("newWebsite"),
+            },
           },
           rating: Number(fd.get("rating")),
           category: fd.get("category"),
           title: fd.get("title"),
           body: fd.get("body"),
           dealYear: fd.get("dealYear") || null,
+          location: fd.get("location"),
           reviewerName: fd.get("reviewerName"),
           firsthand: fd.get("firsthand") === "on",
           turnstileToken: captcha.getToken(),
@@ -298,6 +389,10 @@ async function pageSubmit(params) {
       el("textarea", { name: "body", required: "", minlength: "30", maxlength: "5000" }),
     ),
     el("label", {}, "Year of the deal (optional)", el("input", { name: "dealYear", type: "number", min: "1950", max: String(new Date().getFullYear()) })),
+    el("label", {}, "Where did this take place? (optional)",
+      el("span", { class: "hint" }, "City and country, e.g. “Atlanta, GA, USA” or “London, UK”. This is where the dealings happened, which may differ from where they are based."),
+      el("input", { name: "location", maxlength: "120", placeholder: "e.g. Atlanta, GA, USA" }),
+    ),
     el("label", {}, "Display name (optional — leave blank to post as Anonymous)", el("input", { name: "reviewerName", maxlength: "80" })),
     el("label", { class: "check" },
       el("input", { type: "checkbox", name: "firsthand", required: "" }),
@@ -351,6 +446,104 @@ function pageRespond(reviewId) {
   );
 }
 
+function pageReport(reviewId) {
+  const status = el("div");
+  const captcha = captchaField();
+  const form = el("form", { class: "stack", onsubmit: async (event) => {
+      event.preventDefault();
+      const fd = new FormData(form);
+      try {
+        await api("/api/reports", { method: "POST", body: {
+          reviewId,
+          reason: fd.get("reason"),
+          detail: fd.get("detail"),
+          reporterEmail: fd.get("reporterEmail"),
+          turnstileToken: captcha.getToken(),
+        }});
+        render(
+          notice("Thank you — a moderator will re-review this content."),
+          el("a", { class: "btn", href: "#/" }, "Back to browse"),
+        );
+      } catch (err) {
+        captcha.reset();
+        status.replaceChildren(notice(err.message, true));
+      }
+    }},
+    el("label", {}, "What is wrong with this review?",
+      el("select", { name: "reason", required: "" },
+        Object.entries(REPORT_REASONS).map(([value, label]) => el("option", { value }, label)),
+      ),
+    ),
+    el("label", {}, "Details (optional)",
+      el("span", { class: "hint" }, "Anything that helps a moderator assess it — what specifically is inaccurate, and how you know."),
+      el("textarea", { name: "detail", maxlength: "5000" }),
+    ),
+    el("label", {}, "Your email (optional)",
+      el("span", { class: "hint" }, "Only used if a moderator needs to follow up. Never published."),
+      el("input", { name: "reporterEmail", type: "email" }),
+    ),
+    captcha.element,
+    el("button", { class: "primary", type: "submit" }, "Submit report"),
+    status,
+  );
+  render(
+    el("h1", {}, "Report a review"),
+    el("p", { class: "muted" }, "Anyone can flag published content for re-review. If you are the person named, you can also use the dispute form on their profile."),
+    form,
+  );
+}
+
+function pageClaim(executiveId) {
+  const status = el("div");
+  const captcha = captchaField();
+  const form = el("form", { class: "stack", onsubmit: async (event) => {
+      event.preventDefault();
+      const fd = new FormData(form);
+      try {
+        await api("/api/claims", { method: "POST", body: {
+          executiveId,
+          claimantName: fd.get("claimantName"),
+          claimantEmail: fd.get("claimantEmail"),
+          evidence: fd.get("evidence"),
+          links: {
+            linkedin: fd.get("linkedin"),
+            instagram: fd.get("instagram"),
+            website: fd.get("website"),
+          },
+          turnstileToken: captcha.getToken(),
+        }});
+        render(
+          notice("Claim received. A moderator will verify it and contact you by email."),
+          el("a", { class: "btn", href: "#/" }, "Back to browse"),
+        );
+      } catch (err) {
+        captcha.reset();
+        status.replaceChildren(notice(err.message, true));
+      }
+    }},
+    el("label", {}, "Your full name", el("input", { name: "claimantName", required: "" })),
+    el("label", {}, "Your email",
+      el("span", { class: "hint" }, "Used to verify the claim. Never published."),
+      el("input", { name: "claimantEmail", type: "email", required: "" }),
+    ),
+    el("label", {}, "How can we verify this is you?",
+      el("span", { class: "hint" }, "For example a company email address we can write to, or a profile you control that mentions your role."),
+      el("textarea", { name: "evidence", required: "", minlength: "20", maxlength: "5000" }),
+    ),
+    el("label", {}, "LinkedIn profile", el("input", { name: "linkedin", type: "url", placeholder: "https://www.linkedin.com/in/…" })),
+    el("label", {}, "Instagram profile", el("input", { name: "instagram", type: "url", placeholder: "https://www.instagram.com/…" })),
+    el("label", {}, "Website", el("input", { name: "website", type: "url", placeholder: "https://…" })),
+    captcha.element,
+    el("button", { class: "primary", type: "submit" }, "Submit claim"),
+    status,
+  );
+  render(
+    el("h1", {}, "Claim this profile"),
+    el("p", { class: "muted" }, "If this profile is about you, claiming it marks it as verified and lets readers see that you are engaging. Claiming does not remove or edit reviews — for that, use the response and dispute options."),
+    form,
+  );
+}
+
 function pageDispute(subjectType, subjectId) {
   const status = el("div");
   const captcha = captchaField();
@@ -394,9 +587,20 @@ async function pageAdmin() {
     try {
       const queue = await api("/api/admin/queue", { headers });
       queueBox.replaceChildren(
-        adminSection("Pending profiles", queue.executives, (e) => `${e.name} — ${[e.role, e.company].filter(Boolean).join(", ") || "no details"}`, "executive", headers),
-        adminSection("Pending reviews", queue.reviews, (r) => `${r.title} (${r.rating}★, ${r.category}) about ${r.executive?.name ?? "?"} — ${r.body}`, "review", headers),
+        adminSection("Pending profiles", queue.executives, (e) => {
+          const links = Object.entries(e.links ?? {}).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("  ");
+          return `${e.name} — ${[e.role, e.company, e.region].filter(Boolean).join(", ") || "no details"}${links ? `\n${links}` : ""}`;
+        }, "executive", headers),
+        adminSection("Pending reviews", queue.reviews, (r) =>
+          `${r.title} (${r.rating}★, ${CATEGORY_LABELS[r.category] ?? r.category}${r.location ? `, ${r.location}` : ""}) about ${r.executive?.name ?? "?"}\n${r.body}`,
+          "review", headers),
         adminSection("Pending responses", queue.responses, (r) => `${r.responderName}: ${r.body}`, "response", headers),
+        adminSection("Reported reviews", queue.reports ?? [], (r) =>
+          `${REPORT_REASONS[r.reason] ?? r.reason} — on "${r.review?.title ?? "?"}"\n${r.detail || "(no detail given)"}${r.reporterEmail ? `\ncontact: ${r.reporterEmail}` : ""}`,
+          "report", headers),
+        adminSection("Profile claims", queue.claims ?? [], (c) =>
+          `${c.claimantName} <${c.claimantEmail}> claims ${c.executive?.name ?? "?"}\n${c.evidence}`,
+          "claim", headers),
         adminSection("Open disputes", queue.disputes, (d) => `${d.subjectType} ${d.subjectId} — ${d.reason} (contact: ${d.contactEmail})`, "dispute", headers),
       );
     } catch (err) {
@@ -413,7 +617,11 @@ async function pageAdmin() {
 }
 
 function adminSection(title, items, describe, type, headers) {
-  const actions = type === "dispute" ? [["resolve", "Resolve"], ["dismiss", "Dismiss"]] : [["approve", "Approve"], ["reject", "Reject"]];
+  // Triage items are resolved/dismissed; content items are approved/rejected.
+  const isTriage = ["dispute", "report", "claim"].includes(type);
+  const actions = isTriage
+    ? [["resolve", type === "claim" ? "Verify claim" : "Resolve"], ["dismiss", "Dismiss"]]
+    : [["approve", "Approve"], ["reject", "Reject"]];
   return el("section", {},
     el("h2", {}, `${title} (${items.length})`),
     items.length ? items.map((item) =>
@@ -449,6 +657,8 @@ async function route() {
   if (parts[0] === "exec" && parts[1]) return pageExecutive(parts[1]);
   if (parts[0] === "submit") return pageSubmit(params);
   if (parts[0] === "respond" && parts[1]) return pageRespond(parts[1]);
+  if (parts[0] === "report" && parts[1]) return pageReport(parts[1]);
+  if (parts[0] === "claim" && parts[1]) return pageClaim(parts[1]);
   if (parts[0] === "dispute" && parts[1] && parts[2]) return pageDispute(parts[1], parts[2]);
   // Static legal/policy pages live as <template> blocks in index.html.
   const staticPages = { guidelines: "tpl-guidelines", terms: "tpl-terms", privacy: "tpl-privacy" };

@@ -20,6 +20,8 @@ const SUBMIT_PATHS = new Set([
   "/api/reviews",
   "/api/responses",
   "/api/disputes",
+  "/api/reports",
+  "/api/claims",
 ]);
 
 function json(status, payload, extraHeaders = {}) {
@@ -99,7 +101,17 @@ async function handleApi(request, url, store, env) {
 
 
   if (method === "GET" && pathname === "/api/executives") {
-    return json(200, { executives: store.listExecutives({ q: url.searchParams.get("q") ?? "" }) });
+    const p = url.searchParams;
+    return json(200, {
+      executives: store.listExecutives({
+        q: p.get("q") ?? "",
+        category: p.get("category") ?? "",
+        location: p.get("location") ?? "",
+        minRating: p.get("minRating") ?? 0,
+        maxRating: p.get("maxRating") ?? 5,
+        sort: p.get("sort") ?? "reviews",
+      }),
+    });
   }
   const execMatch = pathname.match(/^\/api\/executives\/([a-f0-9]+)$/);
   if (method === "GET" && execMatch) {
@@ -127,6 +139,16 @@ async function handleApi(request, url, store, env) {
         response: store.submitResponse(body),
         message: "Response submitted for moderation",
       });
+    if (pathname === "/api/reports")
+      return json(201, {
+        report: store.submitReport(body),
+        message: "Report received; a moderator will review this content",
+      });
+    if (pathname === "/api/claims")
+      return json(201, {
+        claim: store.submitClaim(body),
+        message: "Claim received; a moderator will verify it and contact you",
+      });
     return json(201, {
       dispute: store.submitDispute(body),
       message: "Dispute received; a moderator will review it",
@@ -140,6 +162,10 @@ async function handleApi(request, url, store, env) {
   if (pathname === "/api/admin/moderate" && method === "POST") {
     requireAdmin(request, env);
     return json(200, { item: store.moderate(await readBody(request)) });
+  }
+  if (pathname === "/api/admin/links" && method === "POST") {
+    requireAdmin(request, env);
+    return json(200, { executive: store.updateExecutiveLinks(await readBody(request)) });
   }
   return json(404, { error: "Not found" });
 }

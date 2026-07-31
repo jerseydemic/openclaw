@@ -181,6 +181,125 @@ test("submitReviewBundle uses an existing profile when given an id", () => {
   assert.equal(store.moderationQueue().executives.length, 0);
 });
 
+test("profile links reject non-https, wrong-host, and hostile URLs", () => {
+  const store = freshStore();
+  const bad = [
+    { linkedin: "javascript:alert(1)" },
+    { linkedin: "http://www.linkedin.com/in/x" },
+    { linkedin: "https://evil.example.com/in/x" },
+    { instagram: "https://linkedin.com/in/x" },
+    { website: "data:text/html,<script>" },
+  ];
+  for (const links of bad) {
+    assert.throws(() => store.submitExecutive({ name: "Link Person", links }), /URL|https/i);
+  }
+  const ok = store.submitExecutive({
+    name: "Link Person",
+    links: {
+      linkedin: "https://www.linkedin.com/in/example",
+      instagram: "https://instagram.com/example",
+      website: "https://example.com/",
+    },
+  });
+  assert.match(ok.links.linkedin, /linkedin\.com/);
+  assert.match(ok.links.instagram, /instagram\.com/);
+});
+
+test("review location is stored and aggregated onto the profile", () => {
+  const store = freshStore();
+  const executive = store.submitExecutive({ name: "Located Person" });
+  store.moderate({ type: "executive", id: executive.id, action: "approve" });
+  const mk = (location) =>
+    store.submitReview({
+      executiveId: executive.id,
+      rating: 2,
+      category: "unpaid-fees",
+      title: "Somewhere",
+      body: "l".repeat(40),
+      location,
+      firsthand: true,
+    });
+  for (const r of [mk("Atlanta, GA, USA"), mk("London, UK"), mk("Atlanta, GA, USA")]) {
+    store.moderate({ type: "review", id: r.id, action: "approve" });
+  }
+  const loaded = store.getExecutive(executive.id);
+  assert.deepEqual(loaded.locations.sort(), ["Atlanta, GA, USA", "London, UK"]);
+  assert.equal(store.listExecutives({ location: "london" }).length, 1);
+  assert.equal(store.listExecutives({ location: "atlanta" }).length, 1);
+  assert.equal(store.listExecutives({ location: "berlin" }).length, 0);
+});
+
+test("filters by category and sorts by rating", () => {
+  const store = freshStore();
+  const mkExec = (name, rating, category) => {
+    const e = store.submitExecutive({ name });
+    store.moderate({ type: "executive", id: e.id, action: "approve" });
+    const r = store.submitReview({
+      executiveId: e.id, rating, category,
+      title: "Title here", body: "m".repeat(40), firsthand: true,
+    });
+    store.moderate({ type: "review", id: r.id, action: "approve" });
+    return e;
+  };
+  mkExec("Low Rated", 1, "publishing-splits");
+  mkExec("High Rated", 5, "tour-live-deals");
+
+  assert.equal(store.listExecutives({ category: "publishing-splits" }).length, 1);
+  assert.equal(store.listExecutives({ category: "publishing-splits" })[0].name, "Low Rated");
+  assert.equal(store.listExecutives({ sort: "worst" })[0].name, "Low Rated");
+  assert.equal(store.listExecutives({ sort: "best" })[0].name, "High Rated");
+  assert.equal(store.listExecutives({ maxRating: 2 }).length, 1);
+});
+
+test("reports flag published reviews for re-review", () => {
+  const store = freshStore();
+  const executive = store.submitExecutive({ name: "Reported Person" });
+  store.moderate({ type: "executive", id: executive.id, action: "approve" });
+  const review = store.submitReview({
+    executiveId: executive.id, rating: 1, category: "other",
+    title: "A review", body: "r".repeat(40), firsthand: true,
+  });
+  store.moderate({ type: "review", id: review.id, action: "approve" });
+
+  assert.throws(() => store.submitReport({ reviewId: review.id, reason: "nonsense" }), /reason/);
+  assert.throws(() => store.submitReport({ reviewId: "missing", reason: "false" }), /Unknown review/);
+  const report = store.submitReport({ reviewId: review.id, reason: "false", detail: "Not true." });
+  assert.equal(store.moderationQueue().reports.length, 1);
+  assert.equal(store.moderationQueue().reports[0].review.title, "A review");
+  store.moderate({ type: "report", id: report.id, action: "dismiss" });
+  assert.equal(store.moderationQueue().reports.length, 0);
+});
+
+test("verified claim marks the profile claimed and adopts links", () => {
+  const store = freshStore();
+  const executive = store.submitExecutive({ name: "Claimed Person" });
+  store.moderate({ type: "executive", id: executive.id, action: "approve" });
+  assert.equal(store.getExecutive(executive.id).claimed, false);
+
+  assert.throws(
+    () =>
+      store.submitClaim({
+        executiveId: executive.id,
+        claimantName: "Valid Name",
+        claimantEmail: "not-an-email",
+        evidence: "e".repeat(30),
+      }),
+    /email/,
+  );
+  const claim = store.submitClaim({
+    executiveId: executive.id,
+    claimantName: "Claimed Person",
+    claimantEmail: "person@example.com",
+    evidence: "I can reply from my company address to confirm.",
+    links: { linkedin: "https://www.linkedin.com/in/claimed" },
+  });
+  assert.equal(store.moderationQueue().claims.length, 1);
+  store.moderate({ type: "claim", id: claim.id, action: "resolve" });
+  const loaded = store.getExecutive(executive.id);
+  assert.equal(loaded.claimed, true);
+  assert.match(loaded.links.linkedin, /linkedin\.com\/in\/claimed/);
+});
+
 test("search matches name, company, and role", () => {
   const store = freshStore();
   const a = store.submitExecutive({ name: "Alpha One", company: "Beta Records", role: "Manager" });

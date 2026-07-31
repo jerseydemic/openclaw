@@ -2,7 +2,7 @@
 // JSON-file backed, no deps. The Cloudflare Worker uses the same core with KV.
 import fs from "node:fs";
 import path from "node:path";
-import { createStoreCore, emptyDb, ValidationError } from "./core.mjs";
+import { createStoreCore, emptyDb } from "./core.mjs";
 
 export { REVIEW_CATEGORIES, CATEGORY_LABELS, ValidationError } from "./core.mjs";
 
