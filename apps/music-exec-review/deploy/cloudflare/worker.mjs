@@ -27,7 +27,14 @@ const SUBMIT_PATHS = new Set([
 function json(status, payload, extraHeaders = {}) {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8", ...extraHeaders },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      // API responses are per-query and change as moderators act on the queue.
+      // Without this, intermediaries serve stale results when a user changes
+      // filters (observed in testing against the live site).
+      "cache-control": "no-store",
+      ...extraHeaders,
+    },
   });
 }
 

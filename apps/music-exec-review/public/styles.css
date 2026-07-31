@@ -123,8 +123,22 @@ button.approve { border-color: var(--good); color: var(--good); background: tran
 form.stack { display: grid; gap: 0.9rem; max-width: 34rem; }
 form.stack label { display: grid; gap: 0.3rem; font-weight: 600; font-size: 0.92rem; }
 form.stack label .hint { font-weight: 400; color: var(--text-dim); font-size: 0.82rem; }
-.check { display: flex; gap: 0.6rem; align-items: flex-start; font-weight: 400 !important; }
-.check input { width: auto; margin-top: 0.25rem; }
+/* Must out-specify `form.stack label` above, which sets display:grid — with
+   grid the checkbox becomes a stretched grid item and reads as centered. */
+form.stack label.check {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  justify-content: flex-start;
+  text-align: left;
+  font-weight: 400;
+}
+form.stack label.check input {
+  width: auto;
+  flex: 0 0 auto;
+  margin-top: 0.2rem;
+}
+form.stack label.check span { flex: 1; }
 
 .notice {
   padding: 0.8rem 1rem;
