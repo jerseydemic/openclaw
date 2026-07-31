@@ -1,1 +1,4 @@
 data/
+
+# wrangler build/deploy cache
+deploy/cloudflare/.wrangler/
