@@ -1,0 +1,75 @@
+{
+  "executives": [
+    {
+      "id": "6663db3ae4a6fa7d",
+      "name": "Jordan Placeholder (Demo)",
+      "role": "A&R Executive",
+      "company": "Example Records",
+      "region": "Demo City",
+      "status": "approved",
+      "createdAt": "2026-07-31T14:49:41.010Z",
+      "moderatorNote": "seed",
+      "moderatedAt": "2026-07-31T14:49:41.011Z"
+    },
+    {
+      "id": "40bca3af48763be7",
+      "name": "Avery Sample (Demo)",
+      "role": "Artist Manager",
+      "company": "Placeholder Management",
+      "region": "Demo City",
+      "status": "approved",
+      "createdAt": "2026-07-31T14:49:41.014Z",
+      "moderatorNote": "seed",
+      "moderatedAt": "2026-07-31T14:49:41.014Z"
+    }
+  ],
+  "reviews": [
+    {
+      "id": "1bc3e7f27eb556af",
+      "executiveId": "6663db3ae4a6fa7d",
+      "rating": 1,
+      "category": "royalty-payments",
+      "title": "Two years of streaming revenue, zero statements",
+      "body": "Demo data: signed a single deal in 2023. Contract promised quarterly royalty statements; I received none for two years despite repeated written requests. Only after involving a lawyer did statements appear, showing unrecouped 'marketing costs' never itemized.",
+      "dealYear": 2023,
+      "reviewerName": "Demo Artist A",
+      "firsthand": true,
+      "status": "approved",
+      "createdAt": "2026-07-31T14:49:41.012Z",
+      "moderatorNote": "seed",
+      "moderatedAt": "2026-07-31T14:49:41.012Z"
+    },
+    {
+      "id": "4ded558ad8bef00e",
+      "executiveId": "6663db3ae4a6fa7d",
+      "rating": 2,
+      "category": "contract-terms",
+      "title": "Perpetual rights buried in the appendix",
+      "body": "Demo data: the draft presented in the meeting differed from the signature copy — the appendix assigned master ownership in perpetuity rather than the 7-year term we discussed. Caught it before signing thanks to independent counsel.",
+      "dealYear": 2024,
+      "reviewerName": "Anonymous",
+      "firsthand": true,
+      "status": "approved",
+      "createdAt": "2026-07-31T14:49:41.012Z",
+      "moderatorNote": "seed",
+      "moderatedAt": "2026-07-31T14:49:41.012Z"
+    },
+    {
+      "id": "998ccd103ce8d7f6",
+      "executiveId": "40bca3af48763be7",
+      "rating": 5,
+      "category": "communication",
+      "title": "Transparent from day one",
+      "body": "Demo data: clear commission structure, every expense documented, encouraged me to have the contract reviewed by my own lawyer before signing. This is what good looks like — the platform is for positive experiences too.",
+      "dealYear": 2025,
+      "reviewerName": "Demo Artist B",
+      "firsthand": true,
+      "status": "approved",
+      "createdAt": "2026-07-31T14:49:41.014Z",
+      "moderatorNote": "seed",
+      "moderatedAt": "2026-07-31T14:49:41.014Z"
+    }
+  ],
+  "responses": [],
+  "disputes": []
+}

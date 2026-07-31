@@ -50,13 +50,49 @@ async function readBody(request) {
   }
 }
 
-function requireAdmin(request, env) {
+/** Length-independent, constant-time string compare (no early return). */
+function safeEqual(a, b) {
+  const enc = new TextEncoder();
+  const x = enc.encode(String(a ?? ""));
+  const y = enc.encode(String(b ?? ""));
+  let diff = x.length ^ y.length;
+  const len = Math.max(x.length, y.length);
+  for (let i = 0; i < len; i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
+  return diff === 0;
+}
+
+const AUTH_FAIL_LIMIT = 10;
+const AUTH_FAIL_TTL_SECONDS = 900; // 15 minutes
+
+/**
+ * Brute-force guard for the moderation API, backed by KV.
+ *
+ * The Workers rate-limit binding is configured but verified NOT to enforce on
+ * this account (limit=1/60s on a fixed key still let 19/20 through), so admin
+ * auth would otherwise accept unlimited guesses. KV is eventually consistent,
+ * which makes this leaky rather than exact — that is fine for slowing a guess
+ * loop, and it is strictly better than no ceiling at all.
+ */
+async function requireAdmin(request, env) {
   if (!env.ADMIN_TOKEN)
     throw Object.assign(new Error("Admin API disabled: set the ADMIN_TOKEN secret to enable moderation"), {
       status: 503,
     });
-  if (request.headers.get("x-admin-token") !== env.ADMIN_TOKEN)
+
+  const key = `authfail:${clientIp(request)}`;
+  const failures = Number((await env.DB.get(key)) ?? 0);
+  if (failures >= AUTH_FAIL_LIMIT)
+    throw Object.assign(
+      new Error("Too many failed sign-in attempts. Try again later."),
+      { status: 429, retryAfter: AUTH_FAIL_TTL_SECONDS },
+    );
+
+  if (!safeEqual(request.headers.get("x-admin-token"), env.ADMIN_TOKEN)) {
+    await env.DB.put(key, String(failures + 1), { expirationTtl: AUTH_FAIL_TTL_SECONDS });
     throw Object.assign(new Error("Invalid admin token"), { status: 401 });
+  }
+  // Successful sign-in clears the counter for this address.
+  if (failures > 0) await env.DB.delete(key);
 }
 
 const clientIp = (request) => request.headers.get("cf-connecting-ip") ?? "unknown";
@@ -163,15 +199,15 @@ async function handleApi(request, url, store, env) {
   }
 
   if (pathname === "/api/admin/queue" && method === "GET") {
-    requireAdmin(request, env);
+    await requireAdmin(request, env);
     return json(200, store.moderationQueue());
   }
   if (pathname === "/api/admin/moderate" && method === "POST") {
-    requireAdmin(request, env);
+    await requireAdmin(request, env);
     return json(200, { item: store.moderate(await readBody(request)) });
   }
   if (pathname === "/api/admin/links" && method === "POST") {
-    requireAdmin(request, env);
+    await requireAdmin(request, env);
     return json(200, { executive: store.updateExecutiveLinks(await readBody(request)) });
   }
   return json(404, { error: "Not found" });
