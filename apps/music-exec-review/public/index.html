@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FairPlay — Music Industry Accountability Reviews</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#/">Fair<span>Play</span></a>
+    <nav>
+      <a href="#/">Browse</a>
+      <a href="#/submit">Submit a review</a>
+      <a href="#/guidelines">Guidelines</a>
+      <a href="#/admin" class="muted">Moderation</a>
+    </nav>
+  </header>
+
+  <main id="app" aria-live="polite"></main>
+
+  <footer class="site-footer">
+    <p>
+      Reviews reflect the opinions and first-hand experiences of individual contributors, not the
+      views of this site. All submissions are moderated before publication. Named professionals can
+      <a href="#/guidelines">respond or dispute</a> any content about them.
+    </p>
+  </footer>
+
+  <template id="tpl-guidelines">
+    <section class="prose">
+      <h1>Community guidelines</h1>
+      <p>This platform exists to help artists share verifiable, first-hand experiences with music
+        industry executives, managers, and labels — especially around contracts, royalties, and
+        business conduct. To keep it fair and lawful:</p>
+      <h2>What belongs here</h2>
+      <ul>
+        <li><strong>First-hand experiences only.</strong> Describe deals and interactions you were
+          personally part of. Rumors and second-hand stories will be rejected.</li>
+        <li><strong>Facts and honest opinion.</strong> "The contract assigned 100% of my masters in
+          perpetuity" is useful. Stick to what happened and how it affected you.</li>
+        <li><strong>Business conduct.</strong> Contract terms, payment practices, transparency,
+          professionalism.</li>
+      </ul>
+      <h2>What gets rejected</h2>
+      <ul>
+        <li>Accusations of crimes you cannot support with evidence. Calling someone a "fraud" or
+          "scammer" is a factual claim — if it is false, it can be defamatory. Describe what
+          happened instead of applying labels.</li>
+        <li>Personal contact details, home addresses, family information, or anything unrelated to
+          professional conduct (doxxing).</li>
+        <li>Threats, harassment, or calls to action against any person.</li>
+        <li>Reviews about private individuals who are not acting in a professional business capacity.</li>
+      </ul>
+      <h2>Right of reply and disputes</h2>
+      <p>Any person reviewed here may submit a public response to any review, and may file a dispute
+        asking moderators to re-examine content. Disputed content is re-reviewed against evidence,
+        and content that cannot be substantiated is removed.</p>
+      <h2>Moderation</h2>
+      <p>Nothing appears publicly until a moderator approves it. Moderators check submissions against
+        these guidelines before publication and re-review anything that is disputed.</p>
+    </section>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>

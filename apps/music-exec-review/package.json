@@ -1,0 +1,12 @@
+{
+  "name": "music-exec-review",
+  "private": true,
+  "version": "0.1.0",
+  "description": "FairPlay — moderated review platform for music industry executive business conduct",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "seed": "node seed.mjs",
+    "test": "node --test"
+  }
+}
