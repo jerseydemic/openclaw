@@ -153,6 +153,11 @@ form.stack label .hint { font-weight: 400; color: var(--text-dim); font-size: 0.
 
 .footer-links { margin-top: 0.6rem; }
 
+/* Turnstile mounts here; reserve height so the form does not jump on load. */
+.captcha { min-height: 65px; }
+
+button[disabled] { opacity: 0.55; cursor: not-allowed; }
+
 .site-footer {
   max-width: 880px;
   margin: 2rem auto 0;

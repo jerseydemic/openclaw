@@ -118,6 +118,69 @@ test("disputes are recorded and resolvable", () => {
   assert.throws(() => store.submitDispute({ subjectType: "album", subjectId: "x", contactEmail: "a@b.co", reason: "r".repeat(30) }), /subjectType/);
 });
 
+test("submitReviewBundle creates profile and review atomically", () => {
+  const store = freshStore();
+  const review = store.submitReviewBundle({
+    newExecutive: { name: "Bundled Person", company: "Bundle Co" },
+    rating: 3,
+    category: "other",
+    title: "Bundled title",
+    body: "b".repeat(40),
+    firsthand: true,
+  });
+  const queue = store.moderationQueue();
+  assert.equal(queue.executives.length, 1);
+  assert.equal(queue.reviews.length, 1);
+  assert.equal(queue.reviews[0].id, review.id);
+  assert.equal(queue.reviews[0].executive.name, "Bundled Person");
+});
+
+test("submitReviewBundle rolls back the profile when the review is invalid", () => {
+  const store = freshStore();
+  assert.throws(
+    () =>
+      store.submitReviewBundle({
+        newExecutive: { name: "Orphan Person" },
+        rating: 9, // invalid
+        category: "other",
+        title: "Title",
+        body: "c".repeat(40),
+        firsthand: true,
+      }),
+    /rating/,
+  );
+  // No orphaned profile left behind in the moderation queue.
+  assert.equal(store.moderationQueue().executives.length, 0);
+
+  assert.throws(
+    () =>
+      store.submitReviewBundle({
+        rating: 3,
+        category: "other",
+        title: "Title",
+        body: "d".repeat(40),
+        firsthand: true,
+      }),
+    /Select an existing profile/,
+  );
+});
+
+test("submitReviewBundle uses an existing profile when given an id", () => {
+  const store = freshStore();
+  const executive = store.submitExecutive({ name: "Existing Person" });
+  store.moderate({ type: "executive", id: executive.id, action: "approve" });
+  const review = store.submitReviewBundle({
+    executiveId: executive.id,
+    rating: 4,
+    category: "other",
+    title: "Existing title",
+    body: "e".repeat(40),
+    firsthand: true,
+  });
+  assert.equal(review.executiveId, executive.id);
+  assert.equal(store.moderationQueue().executives.length, 0);
+});
+
 test("search matches name, company, and role", () => {
   const store = freshStore();
   const a = store.submitExecutive({ name: "Alpha One", company: "Beta Records", role: "Manager" });

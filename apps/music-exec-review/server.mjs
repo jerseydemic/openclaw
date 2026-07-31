@@ -5,6 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createStore, ValidationError } from "./store.mjs";
+import { TurnstileError, verifyTurnstile } from "./turnstile.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(here, "public");
@@ -86,6 +87,9 @@ async function handleApi(req, res, url) {
   const { pathname } = url;
   const method = req.method ?? "GET";
 
+  if (method === "GET" && pathname === "/api/config") {
+    return json(res, 200, { turnstileSiteKey: process.env.TURNSTILE_SITE_KEY ?? null });
+  }
   if (method === "GET" && pathname === "/api/executives") {
     return json(res, 200, { executives: store.listExecutives({ q: url.searchParams.get("q") ?? "" }) });
   }
@@ -103,7 +107,8 @@ async function handleApi(req, res, url) {
   }
   if (method === "POST" && pathname === "/api/reviews") {
     const body = await readBody(req);
-    const review = store.submitReview(body);
+    await verifyTurnstile(body.turnstileToken, process.env.TURNSTILE_SECRET, req.socket.remoteAddress);
+    const review = store.submitReviewBundle(body);
     return json(res, 201, { review, message: "Review submitted for moderation" });
   }
   if (method === "POST" && pathname === "/api/responses") {
@@ -141,7 +146,8 @@ const server = http.createServer(async (req, res) => {
       json(res, 405, { error: "Method not allowed" });
     }
   } catch (err) {
-    const status = err instanceof ValidationError ? 400 : (err.status ?? 500);
+    const status =
+      err instanceof ValidationError || err instanceof TurnstileError ? 400 : (err.status ?? 500);
     if (status >= 500) console.error(err);
     json(res, status, { error: err.message ?? "Internal error" });
   }

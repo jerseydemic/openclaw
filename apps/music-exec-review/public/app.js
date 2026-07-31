@@ -55,6 +55,66 @@ function render(...children) {
   window.scrollTo(0, 0);
 }
 
+// --- captcha (Cloudflare Turnstile) -----------------------------------------
+// The server tells us whether a site key is configured; when it isn't, every
+// helper here degrades to a no-op so local dev needs no captcha setup.
+let CONFIG = { turnstileSiteKey: null };
+let configPromise = null;
+let scriptPromise = null;
+
+function ensureConfig() {
+  if (!configPromise) {
+    configPromise = api("/api/config")
+      .then((cfg) => {
+        CONFIG = cfg;
+        return cfg;
+      })
+      .catch(() => CONFIG);
+  }
+  return configPromise;
+}
+
+function loadTurnstileScript() {
+  if (scriptPromise) return scriptPromise;
+  scriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.defer = true;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("captcha script failed to load"));
+    document.head.append(script);
+  });
+  return scriptPromise;
+}
+
+/**
+ * Build a captcha slot for a form. Returns the element to append plus token
+ * accessors. Tokens are single-use, so reset() after a failed submit.
+ */
+function captchaField() {
+  if (!CONFIG.turnstileSiteKey) {
+    return { element: null, getToken: () => undefined, reset: () => {} };
+  }
+  const holder = el("div", { class: "captcha" });
+  let widgetId = null;
+  loadTurnstileScript()
+    .then(() => {
+      widgetId = window.turnstile.render(holder, { sitekey: CONFIG.turnstileSiteKey });
+    })
+    .catch(() => {
+      holder.replaceChildren(notice("The captcha could not load. Please refresh and try again.", true));
+    });
+  return {
+    element: holder,
+    getToken: () =>
+      widgetId !== null && window.turnstile ? window.turnstile.getResponse(widgetId) : undefined,
+    reset: () => {
+      if (widgetId !== null && window.turnstile) window.turnstile.reset(widgetId);
+    },
+  };
+}
+
 // --- pages ------------------------------------------------------------------
 async function pageBrowse() {
   const list = el("div");
@@ -183,21 +243,23 @@ async function pageSubmit(params) {
   select.addEventListener("change", syncNewFields);
 
   const status = el("div");
+  const captcha = captchaField();
   const form = el("form", { class: "stack", onsubmit: async (event) => {
       event.preventDefault();
       const fd = new FormData(form);
+      const submitButton = form.querySelector("button[type=submit]");
       status.replaceChildren();
+      submitButton.disabled = true;
       try {
-        let executiveId = fd.get("executiveId");
-        if (!executiveId) {
-          const { executive } = await api("/api/executives", { method: "POST", body: {
+        const executiveId = fd.get("executiveId");
+        // One atomic request: the server creates the profile when needed, so a
+        // single captcha token covers the whole submission.
+        await api("/api/reviews", { method: "POST", body: {
+          executiveId: executiveId || undefined,
+          newExecutive: executiveId ? undefined : {
             name: fd.get("newName"), role: fd.get("newRole"),
             company: fd.get("newCompany"), region: fd.get("newRegion"),
-          }});
-          executiveId = executive.id;
-        }
-        await api("/api/reviews", { method: "POST", body: {
-          executiveId,
+          },
           rating: Number(fd.get("rating")),
           category: fd.get("category"),
           title: fd.get("title"),
@@ -205,12 +267,16 @@ async function pageSubmit(params) {
           dealYear: fd.get("dealYear") || null,
           reviewerName: fd.get("reviewerName"),
           firsthand: fd.get("firsthand") === "on",
+          turnstileToken: captcha.getToken(),
         }});
         render(
           notice("Thank you — your review was submitted and will appear once a moderator approves it."),
           el("a", { class: "btn", href: "#/" }, "Back to browse"),
         );
       } catch (err) {
+        // Captcha tokens are single-use, so re-arm the widget before a retry.
+        captcha.reset();
+        submitButton.disabled = false;
         status.replaceChildren(notice(err.message, true));
       }
     }},
@@ -242,6 +308,7 @@ async function pageSubmit(params) {
         el("a", { href: "#/privacy" }, "privacy policy"), ".",
       ),
     ),
+    captcha.element,
     el("button", { class: "primary", type: "submit" }, "Submit for moderation"),
     status,
   );
@@ -252,6 +319,7 @@ async function pageSubmit(params) {
 
 function pageRespond(reviewId) {
   const status = el("div");
+  const captcha = captchaField();
   const form = el("form", { class: "stack", onsubmit: async (event) => {
       event.preventDefault();
       const fd = new FormData(form);
@@ -261,15 +329,18 @@ function pageRespond(reviewId) {
           responderName: fd.get("responderName"),
           responderRole: fd.get("responderRole"),
           body: fd.get("body"),
+          turnstileToken: captcha.getToken(),
         }});
         render(notice("Response submitted. It will appear under the review once approved."), el("a", { class: "btn", href: "#/" }, "Back"));
       } catch (err) {
+        captcha.reset();
         status.replaceChildren(notice(err.message, true));
       }
     }},
     el("label", {}, "Your name", el("input", { name: "responderName", required: "" })),
     el("label", {}, "Your role (optional)", el("input", { name: "responderRole", placeholder: "e.g. the executive named, their representative" })),
     el("label", {}, "Response", el("textarea", { name: "body", required: "", minlength: "10", maxlength: "5000" })),
+    captcha.element,
     el("button", { class: "primary", type: "submit" }, "Submit response"),
     status,
   );
@@ -282,6 +353,7 @@ function pageRespond(reviewId) {
 
 function pageDispute(subjectType, subjectId) {
   const status = el("div");
+  const captcha = captchaField();
   const form = el("form", { class: "stack", onsubmit: async (event) => {
       event.preventDefault();
       const fd = new FormData(form);
@@ -290,9 +362,11 @@ function pageDispute(subjectType, subjectId) {
           subjectType, subjectId,
           contactEmail: fd.get("contactEmail"),
           reason: fd.get("reason"),
+          turnstileToken: captcha.getToken(),
         }});
         render(notice("Dispute received. A moderator will re-review the content and contact you."), el("a", { class: "btn", href: "#/" }, "Back"));
       } catch (err) {
+        captcha.reset();
         status.replaceChildren(notice(err.message, true));
       }
     }},
@@ -301,6 +375,7 @@ function pageDispute(subjectType, subjectId) {
       el("span", { class: "hint" }, "Content that cannot be substantiated against our guidelines is removed."),
       el("textarea", { name: "reason", required: "", minlength: "20", maxlength: "5000" }),
     ),
+    captcha.element,
     el("button", { class: "primary", type: "submit" }, "File dispute"),
     status,
   );
@@ -362,7 +437,9 @@ function adminSection(title, items, describe, type, headers) {
 }
 
 // --- router -----------------------------------------------------------------
-function route() {
+async function route() {
+  // Cached after the first call; forms need it to decide whether to mount a captcha.
+  await ensureConfig();
   const hash = location.hash.replace(/^#/, "") || "/";
   const [path, queryString] = hash.split("?");
   const params = new URLSearchParams(queryString ?? "");

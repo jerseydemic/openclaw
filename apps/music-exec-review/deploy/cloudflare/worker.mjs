@@ -3,15 +3,29 @@
 // or a Durable Object before heavy traffic since concurrent writes can race).
 // Static frontend is served by the Workers static assets binding (see
 // wrangler.jsonc), with SPA fallback handled by the platform.
+//
+// Abuse protection: per-IP rate limits on every API route (stricter on writes,
+// separate bucket on the admin routes so the moderator token cannot be brute
+// forced), plus optional Turnstile on public submissions.
 import { createStoreCore, emptyDb, ValidationError } from "../../core.mjs";
+import { TurnstileError, verifyTurnstile } from "../../turnstile.mjs";
 
 const DB_KEY = "db";
 const MAX_BODY_BYTES = 64 * 1024;
 
-function json(status, payload) {
+// Public write endpoints: these create rows, so they get the tightest limit
+// and are the only ones gated by Turnstile.
+const SUBMIT_PATHS = new Set([
+  "/api/executives",
+  "/api/reviews",
+  "/api/responses",
+  "/api/disputes",
+]);
+
+function json(status, payload, extraHeaders = {}) {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: { "content-type": "application/json; charset=utf-8", ...extraHeaders },
   });
 }
 
@@ -36,9 +50,53 @@ function requireAdmin(request, env) {
     throw Object.assign(new Error("Invalid admin token"), { status: 401 });
 }
 
+const clientIp = (request) => request.headers.get("cf-connecting-ip") ?? "unknown";
+
+/**
+ * Apply the appropriate per-IP rate limit. Bindings are absent in `wrangler dev`
+ * without the flag and in the Node server, so a missing binding is a no-op.
+ */
+async function enforceRateLimit(request, url, env) {
+  const ip = clientIp(request);
+  const isWrite = request.method === "POST";
+  const isAdmin = url.pathname.startsWith("/api/admin/");
+
+  let limiter;
+  let scope;
+  if (isAdmin) {
+    limiter = env.ADMIN_LIMITER;
+    scope = "admin";
+  } else if (isWrite) {
+    limiter = env.SUBMIT_LIMITER;
+    scope = "submit";
+  } else {
+    limiter = env.READ_LIMITER;
+    scope = "read";
+  }
+  if (!limiter?.limit) return;
+
+  const { success } = await limiter.limit({ key: `${scope}:${ip}` });
+  if (!success) {
+    throw Object.assign(
+      new Error(
+        isWrite
+          ? "You are submitting too quickly. Please wait a minute and try again."
+          : "Too many requests. Please wait a minute and try again.",
+      ),
+      { status: 429, retryAfter: 60 },
+    );
+  }
+}
+
 async function handleApi(request, url, store, env) {
   const { pathname } = url;
   const method = request.method;
+
+  // Lets the frontend know whether to render a Turnstile widget.
+  if (method === "GET" && pathname === "/api/config") {
+    return json(200, { turnstileSiteKey: env.TURNSTILE_SITE_KEY ?? null });
+  }
+
 
   if (method === "GET" && pathname === "/api/executives") {
     return json(200, { executives: store.listExecutives({ q: url.searchParams.get("q") ?? "" }) });
@@ -50,22 +108,31 @@ async function handleApi(request, url, store, env) {
       ? json(200, { executive })
       : json(404, { error: "Executive not found (profiles appear after moderation)" });
   }
-  if (method === "POST" && pathname === "/api/executives") {
-    const executive = store.submitExecutive(await readBody(request));
-    return json(201, { executive, message: "Profile submitted for moderation" });
+
+  if (method === "POST" && SUBMIT_PATHS.has(pathname)) {
+    const body = await readBody(request);
+    await verifyTurnstile(body.turnstileToken, env.TURNSTILE_SECRET, clientIp(request));
+    if (pathname === "/api/executives")
+      return json(201, {
+        executive: store.submitExecutive(body),
+        message: "Profile submitted for moderation",
+      });
+    if (pathname === "/api/reviews")
+      return json(201, {
+        review: store.submitReviewBundle(body),
+        message: "Review submitted for moderation",
+      });
+    if (pathname === "/api/responses")
+      return json(201, {
+        response: store.submitResponse(body),
+        message: "Response submitted for moderation",
+      });
+    return json(201, {
+      dispute: store.submitDispute(body),
+      message: "Dispute received; a moderator will review it",
+    });
   }
-  if (method === "POST" && pathname === "/api/reviews") {
-    const review = store.submitReview(await readBody(request));
-    return json(201, { review, message: "Review submitted for moderation" });
-  }
-  if (method === "POST" && pathname === "/api/responses") {
-    const response = store.submitResponse(await readBody(request));
-    return json(201, { response, message: "Response submitted for moderation" });
-  }
-  if (method === "POST" && pathname === "/api/disputes") {
-    const dispute = store.submitDispute(await readBody(request));
-    return json(201, { dispute, message: "Dispute received; a moderator will review it" });
-  }
+
   if (pathname === "/api/admin/queue" && method === "GET") {
     requireAdmin(request, env);
     return json(200, store.moderationQueue());
@@ -82,6 +149,7 @@ export default {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
     try {
+      await enforceRateLimit(request, url, env);
       const db = (await env.DB.get(DB_KEY, "json")) ?? emptyDb();
       let dirty = false;
       const store = createStoreCore(db, () => {
@@ -92,9 +160,11 @@ export default {
       if (dirty) await env.DB.put(DB_KEY, JSON.stringify(db));
       return response;
     } catch (err) {
-      const status = err instanceof ValidationError ? 400 : (err.status ?? 500);
+      const status =
+        err instanceof ValidationError || err instanceof TurnstileError ? 400 : (err.status ?? 500);
       if (status >= 500) console.error(err);
-      return json(status, { error: err.message ?? "Internal error" });
+      const headers = err.retryAfter ? { "retry-after": String(err.retryAfter) } : {};
+      return json(status, { error: err.message ?? "Internal error" }, headers);
     }
   },
 };

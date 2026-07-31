@@ -169,6 +169,27 @@ export function createStoreCore(db, persist) {
     return review;
   }
 
+  /**
+   * Submit a review, optionally creating the executive profile in the same
+   * call. One request keeps it atomic and means a single captcha token covers
+   * the whole submission. Rolls the new profile back if the review is invalid,
+   * so a rejected submission never leaves an orphan profile in the queue.
+   */
+  function submitReviewBundle({ executiveId, newExecutive, ...review }) {
+    if (executiveId) return submitReview({ ...review, executiveId });
+    if (!newExecutive || typeof newExecutive !== "object")
+      throw new ValidationError("Select an existing profile or provide details for a new one");
+    const created = submitExecutive(newExecutive);
+    try {
+      return submitReview({ ...review, executiveId: created.id });
+    } catch (err) {
+      const index = db.executives.findIndex((e) => e.id === created.id);
+      if (index !== -1) db.executives.splice(index, 1);
+      persist();
+      throw err;
+    }
+  }
+
   function submitResponse({ reviewId, responderName, responderRole, body }) {
     const review = db.reviews.find((r) => r.id === reviewId);
     if (!review) throw new ValidationError("Unknown review");
@@ -257,6 +278,7 @@ export function createStoreCore(db, persist) {
     listExecutives,
     getExecutive,
     submitReview,
+    submitReviewBundle,
     submitResponse,
     submitDispute,
     moderationQueue,
