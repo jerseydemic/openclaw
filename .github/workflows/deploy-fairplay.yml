@@ -29,6 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     # Skip on forks, where the deploy secret is not available.
     if: github.repository == 'jerseydemic/openclaw'
+    # CLOUDFLARE_API_TOKEN is stored as an *environment* secret rather than a
+    # repository secret, so the job has to opt into that environment or the
+    # secret resolves to an empty string.
+    environment: CLOUDFLARE_API_TOKEN
     steps:
       - uses: actions/checkout@v4
         with:
