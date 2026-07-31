@@ -5,6 +5,15 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createStore, ValidationError } from "./store.mjs";
+import {
+  SESSION_COOKIE,
+  identifyModerator,
+  parseModerators,
+  readCookie,
+  sessionCookie,
+  signSession,
+  verifySession,
+} from "./auth.mjs";
 import { TurnstileError, verifyTurnstile } from "./turnstile.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -59,13 +68,27 @@ function readBody(req) {
   });
 }
 
-function requireAdmin(req) {
-  if (!ADMIN_TOKEN)
-    throw Object.assign(new Error("Admin API disabled: set ADMIN_TOKEN to enable moderation"), {
-      status: 503,
-    });
-  if (req.headers["x-admin-token"] !== ADMIN_TOKEN)
-    throw Object.assign(new Error("Invalid admin token"), { status: 401 });
+const MODERATORS = parseModerators(process.env.MODERATORS);
+const SESSION_SECRET = process.env.SESSION_SECRET || ADMIN_TOKEN;
+
+/** Resolve the acting moderator from a session cookie or token header. */
+async function requireAdmin(req) {
+  if (!MODERATORS.length && !ADMIN_TOKEN)
+    throw Object.assign(
+      new Error("Moderation disabled: configure MODERATORS to enable it"),
+      { status: 503 },
+    );
+  const session = await verifySession(
+    readCookie(req.headers.cookie, SESSION_COOKIE),
+    SESSION_SECRET,
+  );
+  if (session) return session;
+  const name = await identifyModerator(req.headers["x-admin-token"], {
+    moderators: MODERATORS,
+    sharedToken: ADMIN_TOKEN,
+  });
+  if (!name) throw Object.assign(new Error("Invalid moderator credentials"), { status: 401 });
+  return name;
 }
 
 function serveStatic(req, res, pathname) {
@@ -154,17 +177,28 @@ async function handleApi(req, res, url) {
     });
   }
 
+  if (pathname === "/api/admin/login" && method === "POST") {
+    const body = await readBody(req);
+    const name = await requireAdmin({ headers: { "x-admin-token": body.token ?? "" } });
+    const value = await signSession(name, SESSION_SECRET);
+    res.setHeader("set-cookie", sessionCookie(value).replace("; Secure", ""));
+    return json(res, 200, { moderator: name });
+  }
+  if (pathname === "/api/admin/logout" && method === "POST") {
+    res.setHeader("set-cookie", sessionCookie("", { maxAge: 0 }).replace("; Secure", ""));
+    return json(res, 200, { ok: true });
+  }
   if (pathname === "/api/admin/queue" && method === "GET") {
-    requireAdmin(req);
-    return json(res, 200, store.moderationQueue());
+    const moderator = await requireAdmin(req);
+    return json(res, 200, { ...store.moderationQueue(), moderator });
   }
   if (pathname === "/api/admin/moderate" && method === "POST") {
-    requireAdmin(req);
+    const moderator = await requireAdmin(req);
     const body = await readBody(req);
-    return json(res, 200, { item: store.moderate(body) });
+    return json(res, 200, { item: store.moderate({ ...body, moderator }) });
   }
   if (pathname === "/api/admin/links" && method === "POST") {
-    requireAdmin(req);
+    await requireAdmin(req);
     const body = await readBody(req);
     return json(res, 200, { executive: store.updateExecutiveLinks(body) });
   }

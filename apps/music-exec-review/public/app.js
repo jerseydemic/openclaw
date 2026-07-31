@@ -577,16 +577,35 @@ function pageDispute(subjectType, subjectId) {
 
 // --- moderation -------------------------------------------------------------
 async function pageAdmin() {
-  const token = sessionStorage.getItem("adminToken") ?? "";
-  const tokenInput = el("input", { type: "password", value: token, placeholder: "Admin token", "aria-label": "Admin token" });
+  // The raw token is exchanged for an HttpOnly session cookie and never kept
+  // in browser storage; subsequent calls authenticate with the cookie.
+  const tokenInput = el("input", { type: "password", placeholder: "Moderator token", "aria-label": "Moderator token", autocomplete: "current-password" });
   const queueBox = el("div");
+  const headers = {};
 
-  async function loadQueue() {
-    sessionStorage.setItem("adminToken", tokenInput.value);
-    const headers = { "x-admin-token": tokenInput.value };
+  async function signIn() {
+    queueBox.replaceChildren(el("p", { class: "muted" }, "Signing in…"));
+    try {
+      const { moderator } = await api("/api/admin/login", { method: "POST", body: { token: tokenInput.value } });
+      tokenInput.value = "";
+      await loadQueue(moderator);
+    } catch (err) {
+      queueBox.replaceChildren(notice(err.message, true));
+    }
+  }
+
+  async function loadQueue(moderator, { silent = false } = {}) {
     try {
       const queue = await api("/api/admin/queue", { headers });
       queueBox.replaceChildren(
+        el("p", { class: "muted" },
+          `Signed in as ${queue.moderator ?? moderator ?? "moderator"}. `,
+          el("a", { href: "#/admin", onclick: async (event) => {
+            event.preventDefault();
+            await api("/api/admin/logout", { method: "POST" }).catch(() => {});
+            queueBox.replaceChildren(notice("Signed out."));
+          }}, "Sign out"),
+        ),
         adminSection("Pending profiles", queue.executives, (e) => {
           const links = Object.entries(e.links ?? {}).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("  ");
           return `${e.name} — ${[e.role, e.company, e.region].filter(Boolean).join(", ") || "no details"}${links ? `\n${links}` : ""}`;
@@ -604,16 +623,19 @@ async function pageAdmin() {
         adminSection("Open disputes", queue.disputes, (d) => `${d.subjectType} ${d.subjectId} — ${d.reason} (contact: ${d.contactEmail})`, "dispute", headers),
       );
     } catch (err) {
-      queueBox.replaceChildren(notice(err.message, true));
+      // On first paint we probe for an existing session; no session is normal,
+      // so stay quiet and just show the sign-in form.
+      queueBox.replaceChildren(silent ? el("div") : notice(err.message, true));
     }
   }
 
-  render(
-    el("h1", {}, "Moderation queue"),
-    el("div", { class: "search-row" }, tokenInput, el("button", { class: "primary", onclick: loadQueue }, "Load queue")),
-    queueBox,
+  const form = el("form", { class: "search-row", onsubmit: (event) => { event.preventDefault(); signIn(); } },
+    tokenInput,
+    el("button", { class: "primary", type: "submit" }, "Sign in"),
   );
-  if (token) await loadQueue();
+  render(el("h1", {}, "Moderation"), form, queueBox);
+  // An existing session cookie means we are already signed in; try it silently.
+  await loadQueue(null, { silent: true }).catch(() => {});
 }
 
 function adminSection(title, items, describe, type, headers) {

@@ -7,6 +7,15 @@
 // Abuse protection: per-IP rate limits on every API route (stricter on writes,
 // separate bucket on the admin routes so the moderator token cannot be brute
 // forced), plus optional Turnstile on public submissions.
+import {
+  SESSION_COOKIE,
+  identifyModerator,
+  parseModerators,
+  readCookie,
+  sessionCookie,
+  signSession,
+  verifySession,
+} from "../../auth.mjs";
 import { createStoreCore, emptyDb, ValidationError } from "../../core.mjs";
 import { TurnstileError, verifyTurnstile } from "../../turnstile.mjs";
 
@@ -50,17 +59,6 @@ async function readBody(request) {
   }
 }
 
-/** Length-independent, constant-time string compare (no early return). */
-function safeEqual(a, b) {
-  const enc = new TextEncoder();
-  const x = enc.encode(String(a ?? ""));
-  const y = enc.encode(String(b ?? ""));
-  let diff = x.length ^ y.length;
-  const len = Math.max(x.length, y.length);
-  for (let i = 0; i < len; i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
-  return diff === 0;
-}
-
 const AUTH_FAIL_LIMIT = 10;
 const AUTH_FAIL_TTL_SECONDS = 900; // 15 minutes
 
@@ -73,26 +71,57 @@ const AUTH_FAIL_TTL_SECONDS = 900; // 15 minutes
  * which makes this leaky rather than exact — that is fine for slowing a guess
  * loop, and it is strictly better than no ceiling at all.
  */
-async function requireAdmin(request, env) {
-  if (!env.ADMIN_TOKEN)
-    throw Object.assign(new Error("Admin API disabled: set the ADMIN_TOKEN secret to enable moderation"), {
+const sessionSecret = (env) => env.SESSION_SECRET || env.ADMIN_TOKEN || "";
+
+function moderatorsFrom(env) {
+  try {
+    return parseModerators(env.MODERATORS);
+  } catch (err) {
+    // A malformed list must fail closed rather than silently allow the shared token.
+    throw Object.assign(new Error(`Moderator configuration is invalid: ${err.message}`), {
       status: 503,
     });
+  }
+}
+
+/**
+ * Resolve the acting moderator, or throw. Accepts either a signed session
+ * cookie (normal browser use) or an `x-admin-token` header (scripts/CLI).
+ * Every failure increments a per-IP counter that locks the address out.
+ */
+async function requireAdmin(request, env) {
+  const moderators = moderatorsFrom(env);
+  if (!moderators.length && !env.ADMIN_TOKEN)
+    throw Object.assign(
+      new Error("Moderation disabled: configure the MODERATORS secret to enable it"),
+      { status: 503 },
+    );
+
+  // A valid session skips the lockout counter entirely.
+  const session = await verifySession(
+    readCookie(request.headers.get("cookie"), SESSION_COOKIE),
+    sessionSecret(env),
+  );
+  if (session) return session;
 
   const key = `authfail:${clientIp(request)}`;
   const failures = Number((await env.DB.get(key)) ?? 0);
   if (failures >= AUTH_FAIL_LIMIT)
-    throw Object.assign(
-      new Error("Too many failed sign-in attempts. Try again later."),
-      { status: 429, retryAfter: AUTH_FAIL_TTL_SECONDS },
-    );
+    throw Object.assign(new Error("Too many failed sign-in attempts. Try again later."), {
+      status: 429,
+      retryAfter: AUTH_FAIL_TTL_SECONDS,
+    });
 
-  if (!safeEqual(request.headers.get("x-admin-token"), env.ADMIN_TOKEN)) {
+  const name = await identifyModerator(request.headers.get("x-admin-token"), {
+    moderators,
+    sharedToken: env.ADMIN_TOKEN ?? "",
+  });
+  if (!name) {
     await env.DB.put(key, String(failures + 1), { expirationTtl: AUTH_FAIL_TTL_SECONDS });
-    throw Object.assign(new Error("Invalid admin token"), { status: 401 });
+    throw Object.assign(new Error("Invalid moderator credentials"), { status: 401 });
   }
-  // Successful sign-in clears the counter for this address.
   if (failures > 0) await env.DB.delete(key);
+  return name;
 }
 
 const clientIp = (request) => request.headers.get("cf-connecting-ip") ?? "unknown";
@@ -198,13 +227,28 @@ async function handleApi(request, url, store, env) {
     });
   }
 
+  // Exchange a moderator token for a short-lived HttpOnly session cookie, so
+  // the raw token is never kept in browser storage or replayed per request.
+  if (pathname === "/api/admin/login" && method === "POST") {
+    const body = await readBody(request);
+    const fakeRequest = new Request(request.url, {
+      method: "POST",
+      headers: { "x-admin-token": body.token ?? "" },
+    });
+    const name = await requireAdmin(fakeRequest, env);
+    const value = await signSession(name, sessionSecret(env));
+    return json(200, { moderator: name }, { "set-cookie": sessionCookie(value) });
+  }
+  if (pathname === "/api/admin/logout" && method === "POST") {
+    return json(200, { ok: true }, { "set-cookie": sessionCookie("", { maxAge: 0 }) });
+  }
   if (pathname === "/api/admin/queue" && method === "GET") {
-    await requireAdmin(request, env);
-    return json(200, store.moderationQueue());
+    const moderator = await requireAdmin(request, env);
+    return json(200, { ...store.moderationQueue(), moderator });
   }
   if (pathname === "/api/admin/moderate" && method === "POST") {
-    await requireAdmin(request, env);
-    return json(200, { item: store.moderate(await readBody(request)) });
+    const moderator = await requireAdmin(request, env);
+    return json(200, { item: store.moderate({ ...(await readBody(request)), moderator }) });
   }
   if (pathname === "/api/admin/links" && method === "POST") {
     await requireAdmin(request, env);

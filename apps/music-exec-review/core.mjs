@@ -354,7 +354,7 @@ export function createStoreCore(rawDb, persist) {
     };
   }
 
-  function moderate({ type, id, action, note }) {
+  function moderate({ type, id, action, note, moderator = "unknown" }) {
     const collections = {
       executive: db.executives,
       review: db.reviews,
@@ -370,6 +370,8 @@ export function createStoreCore(rawDb, persist) {
       item.status = action === "resolve" ? "resolved" : "dismissed";
       item.moderatorNote = optString(note, "note", { max: MAX_TEXT });
       item.moderatedAt = now();
+      // Audit trail: which moderator acted, so decisions are attributable.
+      item.moderatedBy = optString(moderator, "moderator", { max: 80 }) || "unknown";
       // An approved claim marks the profile as verified to its subject.
       if (type === "claim" && action === "resolve") {
         const executive = db.executives.find((e) => e.id === item.executiveId);
@@ -394,6 +396,7 @@ export function createStoreCore(rawDb, persist) {
     item.status = action === "approve" ? "approved" : "rejected";
     item.moderatorNote = optString(note, "note", { max: MAX_TEXT });
     item.moderatedAt = now();
+    item.moderatedBy = optString(moderator, "moderator", { max: 80 }) || "unknown";
     persist();
     return item;
   }
