@@ -5,11 +5,17 @@ name: Deploy FairPlay
 # Edit, Workers KV Storage: Edit, Account Settings: Read).
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      # TEMPORARY: verifies the CLOUDFLARE_API_TOKEN secret end to end before
+      # this lands on main. Remove this line once the PR merges — a workflow
+      # only reaches the Actions tab (and workflow_dispatch) from the default
+      # branch, so this push trigger is the only way to exercise it early.
+      - claude/music-exec-review-platform-j4rqpr
     paths:
       - "apps/music-exec-review/**"
       - ".github/workflows/deploy-fairplay.yml"
-  # Lets you deploy the current branch by hand from the Actions tab.
+  # Lets you deploy by hand from the Actions tab (available once on main).
   workflow_dispatch:
 
 permissions: {}
