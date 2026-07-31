@@ -136,8 +136,22 @@ form.stack label .hint { font-weight: 400; color: var(--text-dim); font-size: 0.
 .notice.error { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, var(--surface)); }
 
 .muted { color: var(--text-dim); }
+.prose { max-width: 44rem; }
 .prose h1 { margin-top: 0; }
-.prose h2 { margin-top: 1.6rem; font-size: 1.15rem; }
+.prose h2 { margin-top: 1.8rem; font-size: 1.1rem; }
+.prose li { margin-bottom: 0.35rem; }
+.prose code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.88em;
+}
+
+/* Placeholder warning on the legal templates; operator deletes it once reviewed. */
+.notice.legal-todo { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, var(--surface)); }
+
+.footer-links { margin-top: 0.6rem; }
 
 .site-footer {
   max-width: 880px;

@@ -235,7 +235,12 @@ async function pageSubmit(params) {
     el("label", {}, "Display name (optional — leave blank to post as Anonymous)", el("input", { name: "reviewerName", maxlength: "80" })),
     el("label", { class: "check" },
       el("input", { type: "checkbox", name: "firsthand", required: "" }),
-      el("span", {}, "I confirm this review describes my own first-hand experience, is truthful to the best of my knowledge, and follows the ", el("a", { href: "#/guidelines" }, "community guidelines"), "."),
+      el("span", {},
+        "I confirm this review describes my own first-hand experience and is truthful to the best of my knowledge, and I agree to the ",
+        el("a", { href: "#/guidelines" }, "community guidelines"), ", ",
+        el("a", { href: "#/terms" }, "terms of service"), ", and ",
+        el("a", { href: "#/privacy" }, "privacy policy"), ".",
+      ),
     ),
     el("button", { class: "primary", type: "submit" }, "Submit for moderation"),
     status,
@@ -368,8 +373,10 @@ function route() {
   if (parts[0] === "submit") return pageSubmit(params);
   if (parts[0] === "respond" && parts[1]) return pageRespond(parts[1]);
   if (parts[0] === "dispute" && parts[1] && parts[2]) return pageDispute(parts[1], parts[2]);
-  if (parts[0] === "guidelines") {
-    return render(document.getElementById("tpl-guidelines").content.cloneNode(true));
+  // Static legal/policy pages live as <template> blocks in index.html.
+  const staticPages = { guidelines: "tpl-guidelines", terms: "tpl-terms", privacy: "tpl-privacy" };
+  if (staticPages[parts[0]]) {
+    return render(document.getElementById(staticPages[parts[0]]).content.cloneNode(true));
   }
   if (parts[0] === "admin") return pageAdmin();
   return pageBrowse();
