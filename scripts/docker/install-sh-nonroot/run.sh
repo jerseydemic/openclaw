@@ -37,7 +37,9 @@ if [[ -z "$CMD_PATH" ]]; then
   exit 1
 fi
 echo "==> Verify CLI installed: $CLI_NAME"
-INSTALLED_VERSION="$("$CMD_PATH" --version 2>/dev/null | head -n 1 | tr -d '\r')"
+# `--version` prints a banner (e.g. "OpenClaw 2026.7.1-2 (0790d9f)");
+# extract just the version token before comparing.
+INSTALLED_VERSION="$("$CMD_PATH" --version 2>/dev/null | head -n 1 | tr -d '\r' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?' | head -n 1)"
 
 echo "cli=$CLI_NAME installed=$INSTALLED_VERSION expected=$LATEST_VERSION"
 if [[ "$INSTALLED_VERSION" != "$LATEST_VERSION" ]]; then

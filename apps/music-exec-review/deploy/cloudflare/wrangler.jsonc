@@ -1,0 +1,45 @@
+{
+  // Deploy from this directory: npx wrangler deploy
+  // Docs: https://developers.cloudflare.com/workers/static-assets/
+  "name": "fairplay",
+  "main": "worker.mjs",
+  "compatibility_date": "2025-07-01",
+  "assets": {
+    "directory": "../../public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "DB",
+      // "fairplay-db" namespace, already created in the target Cloudflare account.
+      "id": "89f7effc4455498e9d197d6ab177314d"
+    }
+  ],
+  // Per-IP rate limits, kept as cheap defense-in-depth.
+  // NOTE: verified on this account that the binding is present and limit()
+  // returns success:true but never denies, even at limit=1 on a fixed key, so
+  // do NOT treat this as the primary abuse control. Turnstile (below) is what
+  // actually gates submissions. Re-test this if the Workers plan changes.
+  // namespace_id must be unique per account.
+  "ratelimits": [
+    {
+      // Public submissions: reviews, profiles, responses, disputes.
+      "name": "SUBMIT_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 5, "period": 60 }
+    },
+    {
+      // Moderation routes; also throttles admin-token guessing.
+      "name": "ADMIN_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 60, "period": 60 }
+    },
+    {
+      // Browsing and search.
+      "name": "READ_LIMITER",
+      "namespace_id": "1003",
+      "simple": { "limit": 120, "period": 60 }
+    }
+  ]
+}

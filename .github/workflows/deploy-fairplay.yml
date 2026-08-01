@@ -1,0 +1,53 @@
+name: Deploy FairPlay
+
+# Deploys apps/music-exec-review to Cloudflare Workers whenever its files change
+# on main. Requires the CLOUDFLARE_API_TOKEN repository secret (Workers Scripts:
+# Edit, Workers KV Storage: Edit, Account Settings: Read).
+on:
+  push:
+    branches:
+      - main
+      # TEMPORARY: verifies the CLOUDFLARE_API_TOKEN secret end to end before
+      # this lands on main. Remove this line once the PR merges — a workflow
+      # only reaches the Actions tab (and workflow_dispatch) from the default
+      # branch, so this push trigger is the only way to exercise it early.
+      - claude/music-exec-review-platform-j4rqpr
+    paths:
+      - "apps/music-exec-review/**"
+      - ".github/workflows/deploy-fairplay.yml"
+  # Lets you deploy by hand from the Actions tab (available once on main).
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: deploy-fairplay
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Skip on forks, where the deploy secret is not available.
+    if: github.repository == 'jerseydemic/openclaw'
+    # CLOUDFLARE_API_TOKEN is stored as an *environment* secret rather than a
+    # repository secret, so the job has to opt into that environment or the
+    # secret resolves to an empty string.
+    environment: CLOUDFLARE_API_TOKEN
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run store tests
+        working-directory: apps/music-exec-review
+        run: node --test
+
+      - name: Deploy to Cloudflare Workers
+        working-directory: apps/music-exec-review/deploy/cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx --yes wrangler@4 deploy

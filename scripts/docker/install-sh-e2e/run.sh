@@ -68,7 +68,9 @@ else
 fi
 
 echo "==> Verify installed version"
-INSTALLED_VERSION="$(openclaw --version 2>/dev/null | head -n 1 | tr -d '\r')"
+# `--version` prints a banner (e.g. "OpenClaw 2026.7.1-2 (0790d9f)");
+# extract just the version token before comparing.
+INSTALLED_VERSION="$(openclaw --version 2>/dev/null | head -n 1 | tr -d '\r' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?' | head -n 1)"
 echo "installed=$INSTALLED_VERSION expected=$EXPECTED_VERSION"
 if [[ "$INSTALLED_VERSION" != "$EXPECTED_VERSION" ]]; then
   echo "ERROR: expected openclaw@$EXPECTED_VERSION, got openclaw@$INSTALLED_VERSION" >&2
